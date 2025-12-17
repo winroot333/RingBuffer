@@ -57,8 +57,6 @@ public class RingBuffer<T> {
             while (isFull()) {
                 notFull.await();
             }
-            System.out.printf("Thread: %s is putting element %s\n",
-                    Thread.currentThread().getName(), value);
             buffer[tail] = value;
             tail = getNextTailIndex();
             size++;
