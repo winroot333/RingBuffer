@@ -1,25 +1,45 @@
 package io.github.winroot33;
 
-import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public class Main {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException {
+
         var ringBuffer = new RingBuffer<String>(5);
-        ringBuffer.putAll(List.of("1", "2", "3", "4"));
-        ringBuffer.putAll(List.of("5", "6", "7"));
-        System.out.println("Full: " + ringBuffer.isFull());
+        var threadPool = Executors.newFixedThreadPool(4);
 
-        ringBuffer.remove();
-        ringBuffer.remove();
+        // Производитель
+        threadPool.submit(() -> {
+            try {
+                for (int i = 0; i <= 20; i++) {
+                    ringBuffer.put("Message " + i);
+                    Thread.sleep(100);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
 
-        System.out.println(ringBuffer.get(0));
+        // Потребители
+        for (int i = 0; i < 3; i++) {
+            threadPool.submit(() -> {
+                try {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        String message = ringBuffer.take();
+                        System.out.printf("Thread: %s taken element with message: %s\n",
+                                Thread.currentThread().getName(), message);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
 
-        ringBuffer.remove();
-        System.out.println("Empty: " + ringBuffer.isEmpty());
+        Thread.sleep(10000);
 
-        ringBuffer.putAll(List.of("1", "2", "3", "4"));
-        ringBuffer.putAll(List.of("5", "6", "7"));
-        ringBuffer.clear();
-        System.out.println("Empty after clear: " + ringBuffer.isEmpty());
+        if (!threadPool.awaitTermination(30, TimeUnit.SECONDS)) {
+            threadPool.shutdownNow();
+        }
     }
 }

@@ -3,8 +3,8 @@ package io.github.winroot33;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
-import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -18,10 +18,13 @@ public class RingBuffer<T> {
     private final Object[] buffer;
     @Getter
     private final int capacity;
+    private final Lock locker;
+    private final Condition notEmpty;
+    private final Condition notFull;
+
     private int size;
     private int tail;
     private int head;
-    private Lock locker;
 
     /**
      * Создает RingBuffer
@@ -39,28 +42,30 @@ public class RingBuffer<T> {
         head = 0;
         buffer = new Object[capacity];
         locker = new ReentrantLock();
+        notEmpty = locker.newCondition();
+        notFull = locker.newCondition();
     }
 
     /**
-     * Добавляет элемент в буффер. При переполнении буффера перезаписывает старые элементы.
+     * Добавляет элемент в буффер. Ждет удаления элементов если буффер полон
      *
      * @param value Элемент для записи
      */
-    public void put(T value) {
+    public void put(T value) throws InterruptedException {
         locker.lock();
         try {
-            if (isFull()) {
-                buffer[tail] = value;
-                head = getNextHeadIndex();
-            } else {
-                buffer[tail] = value;
-                size++;
+            while (isFull()) {
+                notFull.await();
             }
+            System.out.printf("Thread: %s is putting element %s\n",
+                    Thread.currentThread().getName(), value);
+            buffer[tail] = value;
             tail = getNextTailIndex();
+            size++;
+            notEmpty.signal();
         } finally {
             locker.unlock();
         }
-
     }
 
     private int getNextHeadIndex() {
@@ -72,28 +77,14 @@ public class RingBuffer<T> {
     }
 
     /**
-     * Добавляет список значений в буффер
-     *
-     * @param values Список значений для добавления
-     */
-    public void putAll(List<T> values) {
-        locker.lock();
-        try {
-            values.forEach(this::put);
-        } finally {
-            locker.unlock();
-        }
-    }
-
-    /**
-     * Получает элемент из буффера. Индексы с 0 до capacity -1.
+     * Получает элемент из буффера, не удаляя его. Индексы с 0 до capacity -1.
      * Элемент по индексу 0 - самый старый. По индексу capacity -1 последний записанный, если существует.
      *
      * @param index Индекс элемента
      * @return Элемент по указанному индексу
      */
     @SuppressWarnings("unchecked")
-    public T get(int index) {
+    public T peek(int index) {
         locker.lock();
         try {
             if (isEmpty()) {
@@ -111,17 +102,23 @@ public class RingBuffer<T> {
     }
 
     /**
-     * Удаляет элемент из буффера. Удаляет самый старый элемент по принципу FIFO
+     * Берет значение из буффера. Получает и удаляет его. Ждет если буффер пуст
+     *
+     * @return Значение из буффера
      */
-    public void remove() {
+    @SuppressWarnings("unchecked")
+    public T take() throws InterruptedException {
         locker.lock();
         try {
-            if (isEmpty()) {
-                throw new NoSuchElementException("Buffer is empty");
+            while (isEmpty()) {
+                notEmpty.await();
             }
+            T value = (T) buffer[head];
             buffer[head] = null;
-            size--;
             head = getNextHeadIndex();
+            size--;
+            notFull.signal();
+            return value;
         } finally {
             locker.unlock();
         }
@@ -139,6 +136,7 @@ public class RingBuffer<T> {
             size = 0;
             head = 0;
             tail = 0;
+            notFull.signalAll();
         } finally {
             locker.unlock();
         }
@@ -149,14 +147,8 @@ public class RingBuffer<T> {
      *
      * @return буффер пуст или нет
      */
-    public boolean isEmpty() {
-        locker.lock();
-        try {
-
-            return size == 0;
-        } finally {
-            locker.unlock();
-        }
+    private boolean isEmpty() {
+        return size == 0;
     }
 
     /**
@@ -164,12 +156,7 @@ public class RingBuffer<T> {
      *
      * @return буффер полон или нет
      */
-    public boolean isFull() {
-        locker.lock();
-        try {
-            return size == capacity;
-        } finally {
-            locker.unlock();
-        }
+    private boolean isFull() {
+        return size == capacity;
     }
 }
